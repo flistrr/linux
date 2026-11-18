@@ -1,0 +1,329 @@
+ЛАБИ 1–10 — ЩО ЗАПУСКАТИ ПО ПОРЯДКУ
+====================================
+
+Позначки на початку блоку кажуть, ДЕ набирати команди:
+  [МАК]        — Terminal на Маці
+  [VM]         — віртуалка; на Маці: multipass shell linux-lab   (запрошення ubuntu@linux-lab)
+  [КОНТЕЙНЕР]  — з VM: lxc exec ubuntu-node -- bash             (запрошення root@ubuntu-node, вихід: exit)
+
+Друге/третє вікно: на Маці новий таб Terminal (Cmd+T) → multipass shell linux-lab.
+Звіти редагуєш у VM: nano <файл>  (зберегти Ctrl+O Enter, вийти Ctrl+X).
+⟦…⟧ у звітах — місця для значень з твоєї машини; команда, звідки взяти, — всередині дужок.
+
+
+КРОК 1. СТЕНД (один раз)
+------------------------
+
+[МАК]  (якщо VM linux-lab уже створена — перші два рядки пропусти)
+  brew install --cask multipass
+  multipass launch 24.04 --name linux-lab --cpus 2 --memory 4G --disk 20G
+  multipass transfer ~/Downloads/labs-filled.zip linux-lab:/home/ubuntu/
+  multipass shell linux-lab
+
+[VM]
+  python3 -m zipfile -e labs-filled.zip .
+  bash labs-filled/make-stand.sh
+  exit
+
+[МАК]
+  multipass shell linux-lab
+
+[VM]  перевірка, що стенд живий:
+  ls /home/shared/labs          # має бути 10 папок lab-01 … lab-10-firewall
+  lxc list                      # ubuntu-node, STATE = RUNNING, є IPv4
+  bash labs-filled/deploy.sh
+
+Якщо make-stand.sh впав — скинь вміст файла ~/make-stand.log.
+
+
+КРОК 2. ЛАБА 1                                   [VM]
+---------------------------------------------------
+  cd ~/labs/lab-01
+  bash lab01-fill.sh
+Готово: ~/labs/lab-01/report.txt
+
+
+КРОК 3. ЛАБА 2                                   [VM]
+---------------------------------------------------
+  bash ~/labs/lab-02/lab02-run.sh
+  less ~/labs/lab-02/workspace/data/raw/application.log      # подивитись, вийти — q
+Готово: ~/labs/lab-02/workspace/ (звіт — workspace/report.txt)
+Якщо пише «workspace уже існує»:  mv ~/labs/lab-02/workspace ~/labs/lab-02/workspace.old  і знову.
+
+
+КРОК 4. ЛАБА 3                                   [VM]
+---------------------------------------------------
+  cd ~/labs/lab-03/assets
+  python3 worker.py
+     → Ctrl+Z, потім:  jobs -l ;  bg %1 ;  fg %1 ;  Ctrl+C ;  echo $?      (буде 130)
+  python3 worker.py > /dev/null & echo $! > worker.pid
+  ps -o pid,ppid,stat,tty,cmd -p "$(cat worker.pid)"
+  pgrep -af "python3 worker.py"
+  kill -SIGSTOP "$(cat worker.pid)" ; ps -o pid,stat -p "$(cat worker.pid)"   (буде T)
+  kill -SIGCONT "$(cat worker.pid)" ; kill "$(cat worker.pid)"
+  mkdir -p logs
+  python3 worker.py >> logs/worker.log 2>> logs/worker-error.log & echo $! > worker.pid
+  sleep 5 ; kill -SIGTERM "$(cat worker.pid)" ; wait "$(cat worker.pid)" ; echo $?   (буде 0)
+  python3 worker.py >> logs/worker.log 2>> logs/worker-error.log & echo $! > worker.pid
+  sleep 3 ; kill -SIGKILL "$(cat worker.pid)" ; wait "$(cat worker.pid)" ; echo $?   (буде 137)
+  nano process-report.txt          # вписати PID і PPID
+Все в ОДНОМУ вікні: wait бачить лише процеси, запущені в цьому вікні.
+
+
+КРОК 5. ЛАБА 4                                   [VM]
+---------------------------------------------------
+  cd ~/labs/lab-04
+  ROBOT_ENV=testing ; echo "$ROBOT_ENV" ; bash -c 'echo "$ROBOT_ENV"'
+  export ROBOT_ENV ; bash -c 'echo "$ROBOT_ENV"'
+  bash set-env.sh ; echo "$ROBOT_COLOR"
+  source set-env.sh ; echo "$ROBOT_COLOR"
+  ./setup_robot.sh ; echo $?                    (інструкція, код 1)
+  ./setup_robot.sh unknown ; echo $?            (помилка, код 1)
+  ./setup_robot.sh development & SETUP_PID=$!
+  sleep 3 ; kill -TERM "$SETUP_PID" ; wait "$SETUP_PID" ; echo $?     (буде 0)
+  tail -n 5 runtime/development/logs/robot.log
+  mkdir -p bin ; ln -s ../setup_robot.sh bin/setup-robot
+  export PATH="$HOME/labs/lab-04/bin:$PATH" ; command -v setup-robot
+Що казати про export/source — ~/labs-filled/lab-04-bash/NOTES.txt
+
+
+КРОК 6. ЛАБА 5                                   [VM]
+---------------------------------------------------
+  systemd-analyze
+  systemd-analyze blame | head -n 5
+  systemd-analyze critical-chain
+  sudo dmesg | head -n 20
+  sudo dmesg | grep -i -m 5 -E 'virtio|vda|enp|eth'
+  systemctl status ssh
+  systemctl cat ssh
+  mkdir -p ~/.config/systemd/user
+  cp ~/labs-filled/lab-05-services/systemd-user/robot.service ~/.config/systemd/user/
+  nano ~/.config/systemd/user/robot.service
+     → ТИМЧАСОВО видали рядки Restart=on-failure і RestartSec=2 (повернеш у завданні 4.2)
+  systemctl --user daemon-reload
+  systemctl --user start robot
+  systemctl --user status robot
+Далі завдання 4 з методички (у тому ж файлі):
+  4.1 видалити Environment=ROBOT_ENV=lab → daemon-reload → restart → status (код 2, exit-code)
+  4.2 повернути Restart=on-failure і RestartSec=2 → daemon-reload → restart
+      → через ~30 с: systemctl --user show robot -p NRestarts
+  4.3 повернути Environment=ROBOT_ENV=lab → daemon-reload → systemctl --user reset-failed robot → restart
+  4.4 systemctl --user show robot -p MainPID ; kill -SIGKILL <PID> ; через 3 с status і MainPID знову
+  4.5 systemctl --user stop robot → status (не перезапустилась) → systemctl --user start robot
+  nano ~/labs/lab-05/service-report.txt
+Службу robot НЕ зупиняй — вона потрібна в лабі 6.
+
+
+КРОК 7. ЛАБА 6                                   [VM]
+---------------------------------------------------
+  systemctl --user enable robot
+  ls -l ~/.config/systemd/user/default.target.wants/
+  systemctl --user disable robot
+  journalctl --user-unit robot -n 20
+  journalctl --user-unit robot -n 5 -o short-iso
+  journalctl --user-unit robot -f                         (вийти — Ctrl+C)
+  journalctl --user-unit robot -n 8 -o json-pretty | grep -E '"(MESSAGE|PRIORITY)"'
+  journalctl --user-unit robot -p warning
+  nano ~/.config/systemd/user/robot.service     → у [Service] додати рядок SyslogLevel=warning
+  systemctl --user daemon-reload ; systemctl --user restart robot
+  sleep 15 ; journalctl --user-unit robot -p warning
+  sudo journalctl -b -p err
+  sudo journalctl -b -p err -q --no-pager | wc -l
+  sudo journalctl -u ssh -n 20
+  ls /var/log ; sudo tail /var/log/auth.log
+  cp ~/labs-filled/lab-06-journal/systemd-user/status.service ~/.config/systemd/user/
+  cp ~/labs-filled/lab-06-journal/systemd-user/status.timer   ~/.config/systemd/user/
+  systemctl --user daemon-reload
+  systemctl --user start status.service ; cat ~/labs/lab-06-journal/status.log
+  systemctl --user enable --now status.timer ; systemctl --user list-timers
+  nano ~/labs/lab-06-journal/journal-report.txt
+Через 2–3 хвилини (у status.log ≥ 2 рядки) — прибирання:
+  wc -l ~/labs/lab-06-journal/status.log
+  systemctl --user disable --now status.timer robot
+  systemctl --user list-timers
+
+
+КРОК 8. ЛАБА 7                     [VM] + [КОНТЕЙНЕР]
+---------------------------------------------------
+[VM]
+  cd ~/labs/lab-07-network
+  NODE_IP=$(lxc list ubuntu-node -c 4 --format csv | cut -d' ' -f1) ; echo "$NODE_IP"
+  ip -br link
+  ip -4 addr
+  ip -4 route | grep default         # тут видно зовнішній інтерфейс (зазвичай enp0s1)
+  ip link show enp0s1               # або як у тебе називається зовнішній інтерфейс
+  ping -c 4 "$NODE_IP"
+  ip -4 neigh show dev lxdbr0
+  ip -4 route ; ip route get 8.8.8.8
+  hostname
+[КОНТЕЙНЕР]
+  ip -br link ; ip -4 addr show eth0 ; ip link show eth0
+  GW=$(ip -4 route | awk '/default/ {print $3}') ; ping -c 4 "$GW"
+  ip -4 neigh ; ip -4 route ; ip route get 8.8.8.8
+  tracepath -n -m 10 8.8.8.8
+  hostname
+  getent hosts example.com ; dig example.com ; nslookup example.com
+  echo "$GW server" >> /etc/hosts
+  getent hosts server ; dig server ; ping -c 2 server
+  exit
+[VM]
+  nano assets/network-report.txt
+  ./check-lab.sh
+У локальній VM мережа 192.168.64.x (приватний діапазон 192.168.0.0/16), а не AWS.
+
+
+КРОК 9. ЛАБА 8          [VM] + 2 вікна [КОНТЕЙНЕР] (К1, К2)
+---------------------------------------------------
+[К1]  cp /home/shared/labs/lab-08-sockets/assets/robot_server.py ~/
+[VM]  cd ~/labs/lab-08-sockets
+      NODE_IP=$(lxc list ubuntu-node -c 4 --format csv | cut -d' ' -f1)
+      sudo ss -tulnp
+TCP вручну:
+  [К1] nc -l 5000
+  [VM] nc "$NODE_IP" 5000          (набрати пару рядків, не закривати)
+  [К2] ss -tanp | grep 5000        [VM, друге вікно] ss -tan | grep 5000
+  потім Ctrl+C в обох nc
+HTTP:
+  [VM] curl -v http://example.com/ -o /dev/null
+  [К1] python3 -m http.server 8000
+  [VM] curl -v "http://$NODE_IP:8000/" ; curl -v "http://$NODE_IP:8000/status"
+  [К1] Ctrl+C
+Сервер робота:
+  [К1] python3 ~/robot_server.py
+  [VM] python3 assets/robot_client.py "$NODE_IP" 5000 "MOVE 100"
+  [VM] python3 assets/robot_client.py "$NODE_IP" 5000 "JUMP 5"
+  [VM вікно 1] python3 assets/robot_client.py "$NODE_IP" 5000 "MOVE 100" --wait 30
+  [VM вікно 2] python3 assets/robot_client.py "$NODE_IP" 5000 "MOVE 100" --wait 30
+  [К2] ss -tan | grep 5000         (поки клієнти чекають)
+  [К1] Ctrl+C
+UDP і недоступний отримувач:
+  [К1] nc -u -l 5001
+  [VM] nc -u "$NODE_IP" 5001       (набрати пару рядків)
+  [К2] ss -uan | grep 5001
+  Ctrl+C в обох nc
+  [VM] python3 assets/robot_client.py "$NODE_IP" 5000 "MOVE 100"
+  [VM] python3 assets/udp_sender.py "$NODE_IP" 5001 "hello"
+[VM] nano assets/sockets-report.txt
+Клієнт запускай саме так (з ~/labs/lab-08-sockets, як assets/robot_client.py) — client.log пишеться поруч зі скриптом.
+
+
+КРОК 10. ЛАБА 9          2–3 вікна [VM] + [КОНТЕЙНЕР]
+---------------------------------------------------
+[КОНТЕЙНЕР]
+  adduser admin1                  (придумай пароль)
+  usermod -aG sudo admin1 ; groups admin1
+  sshd -T | grep -E '^(permitrootlogin|passwordauthentication|pubkeyauthentication) '
+  ip -4 addr show eth0
+  ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+[VM]
+  cd ~/labs/lab-09-ssh
+  NODE_IP=$(lxc list ubuntu-node -c 4 --format csv | cut -d' ' -f1)
+  ssh admin1@"$NODE_IP"
+     → звір відбиток з контейнерним, yes; РАЗ введи НЕПРАВИЛЬНИЙ пароль, потім правильний; exit
+  ssh-keygen -F "$NODE_IP"
+  [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519
+  ssh-copy-id admin1@"$NODE_IP"
+  ssh admin1@"$NODE_IP"            → ls -la ~/.ssh ; exit
+  ssh admin1@"$NODE_IP" hostname
+[КОНТЕЙНЕР]  chmod g+w /home/admin1/.ssh/authorized_keys
+[VM]         ssh -v admin1@"$NODE_IP"          (запитає пароль — Ctrl+C)
+[КОНТЕЙНЕР]  journalctl -u ssh -n 20 ; chmod 600 /home/admin1/.ssh/authorized_keys
+[VM]         ssh admin1@"$NODE_IP" hostname    (знову без пароля)
+Тунель:
+  [КОНТЕЙНЕР, окреме вікно]
+    python3 -m http.server 8000 --bind 127.0.0.1 --directory /home/shared/labs/lab-09-ssh/assets/dashboard
+  [VM] curl "http://$NODE_IP:8000/"                                       (відмова — так і треба)
+  [VM вікно 2] ssh -N -L $((10000 + $(id -u))):127.0.0.1:8000 admin1@"$NODE_IP"     (лишити)
+  [VM вікно 3] curl "http://127.0.0.1:$((10000 + $(id -u)))/"
+               ss -tlnp | grep $((10000 + $(id -u)))
+  Потім Ctrl+C у тунелі й у http.server.
+ros2_ws:
+  [VM, ~/labs/lab-09-ssh]
+  du -sh assets/ros2_ws
+  tar -czf ros2_ws.tar.gz --exclude=build --exclude=install --exclude=log -C assets ros2_ws
+  tar -tzf ros2_ws.tar.gz ; ls -lh ros2_ws.tar.gz
+  scp ros2_ws.tar.gz admin1@"$NODE_IP":
+  ssh admin1@"$NODE_IP" 'tar -xzf ros2_ws.tar.gz'
+  nano assets/ros2_ws/src/robot_pkg/config/params.yaml        (змінити будь-яке число)
+  rsync -avz --dry-run --exclude=build --exclude=install --exclude=log assets/ros2_ws/ admin1@"$NODE_IP":ros2_ws/
+  rsync -avz --exclude=build --exclude=install --exclude=log assets/ros2_ws/ admin1@"$NODE_IP":ros2_ws/
+Захист SSH (вікно КОНТЕЙНЕРА не закривай — це запасний доступ):
+  [КОНТЕЙНЕР]
+  cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+  nano /etc/ssh/sshd_config        → PermitRootLogin no  і  PasswordAuthentication no
+  sshd -t && systemctl reload ssh
+  sshd -T | grep -E '^(permitrootlogin|passwordauthentication) '     (passwordauthentication лишився yes)
+  grep -ri passwordauthentication /etc/ssh/sshd_config.d/
+  nano /etc/ssh/sshd_config.d/50-cloud-init.conf     → змінити yes на no
+  sshd -t && systemctl reload ssh
+  sshd -T | grep -E '^(permitrootlogin|passwordauthentication) '     (тепер обидва no)
+  [VM, нове вікно]
+  ssh admin1@"$NODE_IP"                             (входить без пароля; exit)
+  ssh -o PubkeyAuthentication=no admin1@"$NODE_IP"  (Permission denied)
+  [КОНТЕЙНЕР]
+  journalctl -u ssh --since today | grep -E 'Failed password|Connection closed'
+  lastb
+[VM]
+  nano assets/ssh-report.txt
+  ./check-lab.sh
+
+
+КРОК 11. ЛАБА 10          [VM] + 2 вікна [КОНТЕЙНЕР] (К1, К2)
+---------------------------------------------------
+[К1] Аудит:
+  ss -tulpn ; lsof -i -P -n
+  PID=$(ss -tlnp | awk '/:9100 / {match($0, /pid=[0-9]+/); print substr($0, RSTART+4, RLENGTH-4); exit}')
+  systemctl status "$PID"
+  systemctl disable --now robot-telemetry.service ; ss -tlnp | grep 9100
+[К1] Firewall:
+  ufw status verbose
+  ufw default deny incoming ; ufw allow ssh ; ufw status verbose ; ufw enable     (на запит — y)
+[К2] python3 -m http.server 8000
+[VM]
+  cd ~/labs/lab-10-firewall
+  NODE_IP=$(lxc list ubuntu-node -c 4 --format csv | cut -d' ' -f1)
+  nc -vz -w 3 "$NODE_IP" 22 ; nc -vz -w 3 "$NODE_IP" 8000        ← повторюй після кожного рядка з К1 нижче
+[К1] по черзі:
+  ufw allow 8000/tcp
+  ufw delete allow 8000/tcp ; ufw deny 8000/tcp
+  iptables -S ufw-user-input ; iptables -L ufw-user-input -n -v
+  ufw status numbered ; ufw delete <номер правила 8000>      (y; видаляй з більшого номера —
+                                                             після delete номери зсуваються)
+[К2] Ctrl+C
+Клієнт не бачить сервер:
+  [К1] bash /home/shared/labs/lab-10-firewall/assets/start-robot.sh
+  [VM] python3 assets/robot_client.py "$NODE_IP" 5000 "MOVE 100"       → timed out
+  [К1] ufw status numbered ; ufw allow 5000/tcp
+  [VM] те саме                                                          → Connection refused
+  [К1] ss -tlnp | grep 5000 ; pgrep -af robot_server ; kill <PID>
+  [К2] python3 /home/shared/labs/lab-10-firewall/assets/robot_server.py 5000 --bind 0.0.0.0
+  [VM] те саме                                                          → OK MOVE 100
+  [К2] Ctrl+C
+  [VM] те саме                                                          → Connection refused
+  [К2] python3 /home/shared/labs/lab-10-firewall/assets/robot_server.py 5000 --bind 0.0.0.0   (лишити)
+Захоплення:
+  [К1] tcpdump -i eth0 -n -w /root/handshake.pcap tcp port 5000
+  [VM] python3 assets/robot_client.py "$NODE_IP" 5000 "MOVE 100"
+  [К1] Ctrl+C ; tcpdump -n -r /root/handshake.pcap
+[VM]
+  nano assets/firewall-report.txt
+  ./check-lab.sh
+Firewall лиши ввімкненим (SSH + 5000/tcp).
+
+
+КРОК 12. ЗДАЧА
+---------------------------------------------------
+[VM]
+  bash ~/labs-filled/collect.sh
+     → покаже, яких файлів бракує і де ще лишились ⟦…⟧; архів ~/labs-submit.tar.gz
+[МАК]
+  multipass transfer linux-lab:/home/ubuntu/labs-submit.tar.gz ~/Downloads/
+  cd ~/Downloads && tar -xzf labs-submit.tar.gz      # папки 01 … 10
+
+
+ПАУЗА / ПРИБИРАННЯ
+---------------------------------------------------
+[МАК]
+  multipass stop linux-lab        # пауза між сесіями, усе зберігається
+  multipass start linux-lab
+  multipass delete --purge linux-lab && brew uninstall --cask multipass    # прибрати все після курсу
